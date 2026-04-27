@@ -1,0 +1,25 @@
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Jupyter
+.ipynb_checkpoints/
+
+# macOS
+.DS_Store
+
+# Logs
+*.log
+
+# IDE
+.idea/
+.vscode/
+
+# NOTE: data/raw/ and data/processed/ are intentionally NOT ignored
+# because raw CSV files and Parquet files must be submitted as part of the assignment.

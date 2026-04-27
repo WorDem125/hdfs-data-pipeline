@@ -1,0 +1,81 @@
+version: "3.8"
+
+services:
+
+  namenode:
+    image: bde2020/hadoop-namenode:2.0.0-hadoop3.2.1-java8
+    container_name: namenode
+    hostname: namenode
+    restart: unless-stopped
+    ports:
+      - "9870:9870"
+      - "9000:9000"
+    volumes:
+      - namenode_data:/hadoop/dfs/name
+    environment:
+      CLUSTER_NAME: "hdfs-cluster"
+      CORE_CONF_fs_defaultFS: "hdfs://namenode:9000"
+      HDFS_CONF_dfs_replication: "2"
+      HDFS_CONF_dfs_namenode_datanode_registration_ip___hostname___check: "false"
+    env_file:
+      - ./hadoop.env
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:9870/"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  datanode1:
+    image: bde2020/hadoop-datanode:2.0.0-hadoop3.2.1-java8
+    container_name: datanode1
+    hostname: datanode1
+    restart: unless-stopped
+    depends_on:
+      namenode:
+        condition: service_healthy
+    volumes:
+      - datanode1_data:/hadoop/dfs/data
+    environment:
+      CORE_CONF_fs_defaultFS: "hdfs://namenode:9000"
+      HDFS_CONF_dfs_replication: "2"
+      SERVICE_PRECONDITION: "namenode:9870"
+    env_file:
+      - ./hadoop.env
+
+  datanode2:
+    image: bde2020/hadoop-datanode:2.0.0-hadoop3.2.1-java8
+    container_name: datanode2
+    hostname: datanode2
+    restart: unless-stopped
+    depends_on:
+      namenode:
+        condition: service_healthy
+    volumes:
+      - datanode2_data:/hadoop/dfs/data
+    environment:
+      CORE_CONF_fs_defaultFS: "hdfs://namenode:9000"
+      HDFS_CONF_dfs_replication: "2"
+      SERVICE_PRECONDITION: "namenode:9870"
+    env_file:
+      - ./hadoop.env
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: hdfs_pipeline_app
+    depends_on:
+      namenode:
+        condition: service_healthy
+    volumes:
+      - ./data:/app/data
+    environment:
+      HDFS_URL: "http://namenode:9870"
+      HDFS_DIR: "/veselov.dmitry"
+      HDFS_USER: "root"
+
+volumes:
+  namenode_data:
+  datanode1_data:
+  datanode2_data:
