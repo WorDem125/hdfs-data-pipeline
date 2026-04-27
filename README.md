@@ -118,11 +118,6 @@ docker exec namenode hdfs dfs -ls /veselov.dmitry
 
 ![Листинг файлов в HDFS через CLI](docs/screenshots/hdfs-files.png)
 
-```
--rw-r--r--   2 root supergroup   8590564  /veselov.dmitry/road_accident_data.parquet
--rw-r--r--   2 root supergroup    125786  /veselov.dmitry/world_important_dates.parquet
-```
-
 Цифра `2` в третьей колонке — это replication factor.
 
 ### Через Web UI
@@ -164,8 +159,3 @@ docker-compose down -v
 - **Docker / Docker Compose** — контейнеризация инфраструктуры
 - **Parquet + Snappy** — колоночный формат хранения данных
 
----
-
-## Автор
-
-Dmitry Veselov
