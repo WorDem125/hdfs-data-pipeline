@@ -8,30 +8,39 @@ HDFS_URL = os.getenv("HDFS_URL", "http://namenode:9870")
 HDFS_DIR = os.getenv("HDFS_DIR", "/veselov.dmitry")
 HDFS_USER = os.getenv("HDFS_USER", "root")
 
-WAIT_TIMEOUT = 120
-WAIT_INTERVAL = 5
 
-
-def check_hdfs_available(url):
+def check_hdfs_available():
+    # LISTSTATUS на корне — стандартная проверка доступности WebHDFS
     try:
-        resp = requests.get(f"{url}/webhdfs/v1/?op=GETFILESTATUS", timeout=5)
-        # любой HTTP-ответ означает что namenode поднялся
-        return resp.status_code in (200, 403, 404)
+        resp = requests.get(f"{HDFS_URL}/webhdfs/v1/?op=LISTSTATUS", timeout=5)
+        return resp.status_code == 200
     except requests.exceptions.RequestException:
         return False
 
 
-def wait_for_hdfs():
-    print(f"Ждём HDFS по адресу {HDFS_URL}...")
-    elapsed = 0
-    while elapsed < WAIT_TIMEOUT:
-        if check_hdfs_available(HDFS_URL):
-            print(f"HDFS готов (ждали {elapsed} сек)")
+def wait_for_hdfs(max_attempts=30, delay=5):
+    print(f"  Ждём HDFS по адресу {HDFS_URL}...")
+    for attempt in range(1, max_attempts + 1):
+        if check_hdfs_available():
+            print(f"  HDFS готов (попытка {attempt})")
             return
-        time.sleep(WAIT_INTERVAL)
-        elapsed += WAIT_INTERVAL
-        print(f"Ещё ждём... ({elapsed} сек)")
-    raise TimeoutError(f"HDFS не поднялся за {WAIT_TIMEOUT} секунд")
+        print(f"  Попытка {attempt}/{max_attempts}, следующая через {delay} сек...")
+        time.sleep(delay)
+    raise TimeoutError(f"HDFS не ответил за {max_attempts} попыток")
+
+
+def upload_file(client, local_path, hdfs_dir):
+    if not os.path.exists(local_path):
+        raise FileNotFoundError(f"Локальный файл не найден: {local_path}")
+
+    filename = os.path.basename(local_path)
+    hdfs_path = f"{hdfs_dir}/{filename}"
+    size_mb = os.path.getsize(local_path) / (1024 * 1024)
+
+    print(f"  Загружаем {filename} ({size_mb:.1f} MB) -> {hdfs_path}")
+    client.upload(hdfs_path, local_path, overwrite=True)
+    print(f"  Готово: {hdfs_path}")
+    return hdfs_path
 
 
 def upload_all(parquet_paths):
@@ -40,26 +49,26 @@ def upload_all(parquet_paths):
     client = hdfs.InsecureClient(HDFS_URL, user=HDFS_USER)
 
     # создаём директорию если не существует
-    try:
+    if client.status(HDFS_DIR, strict=False) is None:
         client.makedirs(HDFS_DIR)
-        print(f"Директория {HDFS_DIR} создана")
-    except hdfs.util.HdfsError as e:
-        print(f"Директория уже существует или ошибка: {e}")
+        print(f"  Директория {HDFS_DIR} создана")
+    else:
+        print(f"  Директория {HDFS_DIR} уже существует")
 
-    # загружаем каждый файл
+    # загружаем каждый файл по отдельности с обработкой ошибок
     for name, local_path in parquet_paths.items():
-        filename = os.path.basename(local_path)
-        hdfs_path = f"{HDFS_DIR}/{filename}"
-        print(f"Загружаем {filename} -> {hdfs_path}")
-        client.upload(hdfs_path, local_path, overwrite=True)
-        print(f"Загружено: {hdfs_path}")
+        try:
+            upload_file(client, local_path, HDFS_DIR)
+        except Exception as e:
+            print(f"  Ошибка при загрузке {name}: {e}")
+            raise
 
-    # выводим список файлов в HDFS
-    print(f"\nФайлы в HDFS {HDFS_DIR}:")
+    # список файлов после загрузки
+    print(f"\n  Файлы в HDFS {HDFS_DIR}:")
     try:
         files = client.list(HDFS_DIR, status=True)
         for fname, status in files:
             size_kb = status["length"] / 1024
-            print(f"  {fname} — {size_kb:.1f} KB")
+            print(f"    {fname} — {size_kb:.1f} KB")
     except hdfs.util.HdfsError as e:
-        print(f"Ошибка при листинге: {e}")
+        print(f"  Не удалось получить список файлов: {e}")
