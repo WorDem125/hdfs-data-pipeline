@@ -1,4 +1,4 @@
-# hdfs-data-pipeline
+# HDFS Data Pipeline
 
 Полноценный data engineering pipeline: загрузка сырых CSV, нормализация данных, конвертация в Parquet и загрузка в распределённое хранилище Hadoop HDFS — всё в Docker.
 
