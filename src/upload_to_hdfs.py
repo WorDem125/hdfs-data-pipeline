@@ -13,8 +13,12 @@ def check_hdfs_available():
     # LISTSTATUS на корне — стандартная проверка доступности WebHDFS
     try:
         resp = requests.get(f"{HDFS_URL}/webhdfs/v1/?op=LISTSTATUS", timeout=5)
-        return resp.status_code == 200
-    except requests.exceptions.RequestException:
+        if resp.status_code != 200:
+            return False
+        # проверяем что ответ — валидный JSON с ожидаемой структурой
+        data = resp.json()
+        return "FileStatuses" in data
+    except (requests.exceptions.RequestException, ValueError):
         return False
 
 
@@ -55,13 +59,17 @@ def upload_all(parquet_paths):
     else:
         print(f"  Директория {HDFS_DIR} уже существует")
 
-    # загружаем каждый файл по отдельности с обработкой ошибок
+    # загружаем каждый файл по отдельности, собираем ошибки не останавливаясь
+    failed = []
     for name, local_path in parquet_paths.items():
         try:
             upload_file(client, local_path, HDFS_DIR)
         except Exception as e:
             print(f"  Ошибка при загрузке {name}: {e}")
-            raise
+            failed.append(name)
+
+    if failed:
+        raise RuntimeError(f"Не удалось загрузить файлы: {', '.join(failed)}")
 
     # список файлов после загрузки
     print(f"\n  Файлы в HDFS {HDFS_DIR}:")

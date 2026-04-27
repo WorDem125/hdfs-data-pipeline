@@ -79,10 +79,18 @@ def normalize_world_events(path):
 
     # lower=False: оставляем читаемый регистр для исторических событий
     df = clean_text_columns(df, lower=False)
+
+    # убираем вставки "Unknown" внутри значений —
+    # например "QutbUnknownudUnknowndin Aibak" → "Qutubuddin Aibak"
+    # отдельное значение "Unknown" после удаления даст "", которое станет "unknown"
+    for col in df.select_dtypes(include="object").columns:
+        df[col] = df[col].str.replace("Unknown", "", regex=False).str.strip()
+        df[col] = df[col].replace("", "unknown")
+
     df = fill_missing_values(df)
 
     # year, date и month не приводим к datetime —
-    # там есть "Unknown", "2600 BC" и другие нестандартные значения
+    # там есть "unknown", "2600 BC" и другие нестандартные значения
 
     missing_after = int(df.isnull().sum().sum())
     print(f"  После нормализации: {df.shape}, пропусков осталось: {missing_after}")
