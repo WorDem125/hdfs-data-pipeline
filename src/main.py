@@ -1,3 +1,6 @@
+# Точка входа pipeline.
+# Запускает все три этапа последовательно: нормализация → Parquet → HDFS.
+
 import os
 import sys
 import time
@@ -17,6 +20,7 @@ EVENTS_CSV = os.path.join(RAW_DIR, "World_Important_Dates.csv")
 
 
 def check_input_files():
+    """Проверяет наличие исходных CSV-файлов. Завершает программу с ошибкой если файлы не найдены."""
     missing = [p for p in [ACCIDENTS_CSV, EVENTS_CSV] if not os.path.exists(p)]
     if missing:
         print("Ошибка: входные файлы не найдены:")
