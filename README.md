@@ -1,125 +1,171 @@
 # hdfs-data-pipeline
 
-Учебный проект по курсу «Распределённые системы хранения данных», КТ 3.
-
-## Цель
-
-Построить pipeline обработки данных:
+End-to-end data engineering pipeline that ingests raw CSV data, normalizes it, converts to Parquet, and loads into a distributed Hadoop HDFS cluster — all containerized with Docker.
 
 ```
-CSV (raw) → нормализация → Parquet → загрузка в HDFS
+Raw CSV  →  Normalization  →  Parquet (Snappy)  →  HDFS (replication × 2)
 ```
-
-Используются два датасета с Kaggle:
-- **Car Accident Dataset** — дорожные аварии в Великобритании
-- **World Important Events Ancient to Modern** — важные события мировой истории
 
 ---
 
-## Структура проекта
+## Datasets
+
+| Dataset | File | Rows | Columns |
+|---|---|---|---|
+| Car Accident Dataset (UK) | `Road_Accident_Data.csv` | 307 973 | 21 |
+| World Important Events | `World_Important_Dates.csv` | 1 096 | 12 |
+
+---
+
+## Project Structure
 
 ```
 hdfs-data-pipeline/
-├── docker-compose.yml
+├── docker-compose.yml          # HDFS cluster + app container
 ├── Dockerfile
 ├── hadoop.env
 ├── requirements.txt
-├── .gitignore
-├── README.md
 ├── data/
-│   ├── raw/
-│   │   ├── road_accident_data.csv
-│   │   └── world_important_dates.csv
-│   └── processed/
-│       ├── road_accident_data.parquet
-│       └── world_important_dates.parquet
+│   ├── raw/                    # source CSV files
+│   └── processed/              # normalized Parquet files
 ├── notebooks/
 │   └── data_preview.ipynb
 └── src/
-    ├── main.py
-    ├── normalize.py
-    ├── convert_to_parquet.py
-    └── upload_to_hdfs.py
+    ├── main.py                 # pipeline entry point
+    ├── normalize.py            # stage 1 — data cleaning
+    ├── convert_to_parquet.py   # stage 2 — Parquet conversion
+    └── upload_to_hdfs.py       # stage 3 — HDFS upload
 ```
 
 ---
 
-## Описание скриптов
+## Infrastructure
 
-**`src/normalize.py`** — читает сырые CSV, нормализует названия колонок (lowercase + underscore), удаляет дубликаты, заполняет пропуски (текст → "unknown", числа → медиана), приводит даты к datetime.
+The cluster runs in Docker Compose with 4 services:
 
-**`src/convert_to_parquet.py`** — сохраняет нормализированные DataFrame в формат Parquet с компрессией Snappy в папку `data/processed/`.
+| Container | Image | Role |
+|---|---|---|
+| `namenode` | `bde2020/hadoop-namenode:3.2.1` | Stores filesystem metadata and block locations |
+| `datanode1` | `bde2020/hadoop-datanode:3.2.1` | Stores actual data blocks |
+| `datanode2` | `bde2020/hadoop-datanode:3.2.1` | Stores replicated data blocks |
+| `app` | custom Python 3.11 | Runs the pipeline |
 
-**`src/upload_to_hdfs.py`** — подключается к HDFS через WebHDFS (`hdfs.InsecureClient`), создаёт директорию `/veselov.dmitry`, загружает оба Parquet-файла, после загрузки выводит список файлов с размерами.
-
-**`src/main.py`** — точка входа, запускает все три шага по очереди.
-
----
-
-## Инфраструктура (Docker)
-
-В `docker-compose.yml` поднимается Hadoop-кластер:
-
-- **namenode** — хранит метаданные файловой системы (где какой файл, на каких нодах). Web UI доступен на `localhost:9870`.
-- **datanode1**, **datanode2** — хранят блоки данных. Replication factor = 2, то есть каждый блок хранится на обоих DataNode одновременно.
-- **app** — Python-контейнер, запускает pipeline. Стартует только после того, как namenode прошёл healthcheck.
-
-Как это работает: когда файл загружается в HDFS, он разбивается на блоки (по умолчанию 128 МБ). NameNode записывает, где эти блоки лежат, а DataNode физически хранят данные. При replication=2 каждый блок есть на двух DataNode — если один упадёт, данные не потеряются.
+**Replication factor = 2** — every data block is physically stored on both DataNodes. If one node fails, data remains available on the other.
 
 ---
 
-## Запуск
+## Quick Start
 
-**Поднять HDFS:**
+### 1. Start the HDFS cluster
+
 ```bash
 docker-compose up -d namenode datanode1 datanode2
 ```
 
-Подождать ~30 секунд пока namenode инициализируется.
+Wait ~30 seconds for the NameNode to initialize, then verify:
 
-**Запустить pipeline:**
+```bash
+docker ps
+```
+
+All three containers should show `(healthy)`:
+
+![Docker containers healthy](docs/screenshots/docker-containers.png)
+
+---
+
+### 2. Run the pipeline
+
 ```bash
 docker-compose run --rm app
 ```
 
-Контейнер сам дождётся готовности HDFS и выполнит все три шага.
+The app container starts automatically after the NameNode healthcheck passes, then executes all three stages:
 
-**Проверить результат:**
+![Pipeline execution output](docs/screenshots/pipeline-run.png)
+
+**What happens under the hood:**
+
+**Stage 1 — Normalization** (`normalize.py`)
+- Column names → `snake_case` (e.g. `Local_Authority_(District)` → `local_authority_district`)
+- Strip whitespace, lowercase text fields
+- Fill missing text values with `"unknown"`, leave numeric columns untouched
+- Remove duplicates (1 found and removed in accidents dataset)
+- Parse `accident_date` → `datetime64`
+
+**Stage 2 — Parquet conversion** (`convert_to_parquet.py`)
+- Save normalized DataFrames as Parquet with Snappy compression
+- `road_accident_data.parquet` — 8.2 MB (down from 66 MB CSV)
+- `world_important_dates.parquet` — 122.8 KB
+
+**Stage 3 — HDFS upload** (`upload_to_hdfs.py`)
+- Wait for HDFS WebHDFS API to be ready
+- Create directory `/veselov.dmitry` if not exists
+- Upload both Parquet files with `overwrite=True`
+- Print file listing with sizes after upload
+
+Total pipeline time: **~7–12 seconds**
+
+---
+
+## Verify Results
+
+### CLI
+
 ```bash
-# список контейнеров
-docker ps
-
-# файлы в HDFS
 docker exec namenode hdfs dfs -ls /veselov.dmitry
 ```
 
-Или открыть в браузере `http://localhost:9870` → Utilities → Browse the file system → `/veselov.dmitry`.
+![HDFS file listing via CLI](docs/screenshots/hdfs-files.png)
 
-**Остановить:**
+```
+-rw-r--r--   2 root supergroup   8590564  /veselov.dmitry/road_accident_data.parquet
+-rw-r--r--   2 root supergroup    125786  /veselov.dmitry/world_important_dates.parquet
+```
+
+The `2` in the third column is the replication factor.
+
+### Web UI
+
+Open [http://localhost:9870](http://localhost:9870), then go to **Utilities → Browse the file system → `/veselov.dmitry`**:
+
+![HDFS Web UI — file browser](docs/screenshots/hdfs-ui-files.png)
+
+Both files are visible with **Replication = 2** and **Block Size = 128 MB**.
+
+### Replication confirmed
+
+Clicking on a file shows block-level details — the block is stored on both `datanode1` and `datanode2`:
+
+![Block replication across DataNodes](docs/screenshots/replication.png)
+
+This confirms real distributed storage: the file is split into HDFS blocks and each block is replicated across two DataNodes.
+
+---
+
+## Stop the cluster
+
 ```bash
 docker-compose down
 ```
 
----
-
-## Локальный запуск (без Docker)
+To also remove HDFS volumes (data will be lost):
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-python src/main.py
+docker-compose down -v
 ```
-
-Шаги 1 и 2 (нормализация + Parquet) выполнятся, шаг 3 упадёт с таймаутом если нет запущенного HDFS — это нормально.
 
 ---
 
-## Что загружается на GitHub
+## Tech Stack
 
-- `data/raw/` — сырые CSV-файлы
-- `data/processed/` — Parquet-файлы
-- `src/` — Python-скрипты
-- `notebooks/data_preview.ipynb` — просмотр структуры данных
-- `requirements.txt`, `docker-compose.yml`, `Dockerfile`, `hadoop.env`
-- `README.md`
+- **Python 3.11** — pandas, pyarrow, hdfs, requests
+- **Apache Hadoop 3.2.1** — HDFS distributed storage
+- **Docker / Docker Compose** — containerized infrastructure
+- **Parquet + Snappy** — columnar storage format
+
+---
+
+## Author
+
+Dmitry Veselov
